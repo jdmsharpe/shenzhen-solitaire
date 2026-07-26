@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shenzhen-solitaire"
+version = "0.1.0"
+description = "A solver and screenshot recognizer for SHENZHEN I/O Solitaire"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+ocr = ["numpy>=1.23", "opencv-python-headless>=4.10,<6"]
+
+[project.scripts]
+shenzhen-solitaire = "shenzhen_solitaire.solver:main"
+
+[dependency-groups]
+dev = ["ruff>=0.12"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["shenzhen_solitaire*"]
+
+[tool.setuptools.package-data]
+shenzhen_solitaire = ["*.png"]
+
+[tool.ruff]
+target-version = "py310"

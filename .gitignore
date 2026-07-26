@@ -1,0 +1,11 @@
+__pycache__/
+.ruff_cache/
+*.py[cod]
+.venv/
+.venv-windows/
+.venv-wsl/
+*.egg-info/
+build/
+dist/
+/runs/*
+!/runs/.gitkeep
