@@ -24,9 +24,11 @@ from .config import (
     MAX_NUMBER_RANK,
     SUITS,
     TABLEAU_COLUMN_COUNT,
+    board_errors,
     card_rank,
     foundation_index,
     is_number_card,
+    summarize_errors,
 )
 
 
@@ -70,8 +72,29 @@ class _Component:
 class _Reading:
     label: str
     score: float
+    second_label: str
     second_score: float
     bounds: tuple[int, int, int, int]
+
+    @property
+    def margin(self) -> float:
+        """How much better the best match is than the runner-up."""
+
+        return self.second_score - self.score
+
+    @property
+    def confident(self) -> bool:
+        """Whether this reading is both card-like and unambiguous.
+
+        The absolute score only rules out crops that are not cards at all;
+        every pair of distinct classes scores below the threshold. Telling two
+        cards apart is what the margin does.
+        """
+
+        return (
+            self.score <= _MAX_CLASSIFICATION_SCORE
+            and self.margin >= _MIN_CLASSIFICATION_MARGIN
+        )
 
 
 # The reference image contains every card face. These labels describe its
@@ -97,7 +120,24 @@ _CARD_WIDTH = 0.0942
 _CARD_HEIGHT = 0.2864
 _TOP_ROW_Y = 0.0222
 _FLOWER_X = 0.4813
+
+# A corner crop is roughly 51x37 source pixels scaled to 64x48, so one feature
+# pixel is about 0.8 source pixels. A radius of 2 therefore only tolerated
+# +/-1.6 source pixels, which is less than the rounding jitter that
+# round(component.y + index * card_step) introduces on a rescaled screenshot.
+_SHIFT_RADIUS = 4
+
+# An absolute score this high only rules out crops that are not cards at all:
+# every pair of distinct classes scores below it. Telling two cards apart is
+# the margin's job, not this threshold's.
 _MAX_CLASSIFICATION_SCORE = 0.18
+
+# How far the best match must beat the runner-up. Measured over the fixture
+# plus seven perturbations (rescale, stretch, brightness), the tightest margin
+# on a correct read is 0.0008, so this leaves some room below that. It is a
+# diagnostic, not a guarantee: when it fires the report names both candidates
+# instead of leaving a misread to surface later as a nonsense deck.
+_MIN_CLASSIFICATION_MARGIN = 0.0005
 
 
 def _load_image(path: Path) -> np.ndarray:
@@ -255,12 +295,25 @@ def _shift_feature(feature: np.ndarray, dx: int, dy: int) -> np.ndarray:
     return shifted
 
 
-def _feature_distance(first: np.ndarray, second: np.ndarray) -> float:
-    return min(
-        float(np.mean(np.abs(_shift_feature(first, dx, dy) - second)))
-        for dx in range(-2, 3)
-        for dy in range(-2, 3)
-    )
+def _shifted_variants(feature: np.ndarray) -> list[np.ndarray]:
+    """Every alignment the matcher will try for one crop.
+
+    Built once per card rather than once per template comparison. The
+    candidate is identical across all 31 classes, so constructing its shifted
+    copies inside the template loop repeats the same work for every class.
+    """
+
+    return [
+        _shift_feature(feature, dx, dy)
+        for dx in range(-_SHIFT_RADIUS, _SHIFT_RADIUS + 1)
+        for dy in range(-_SHIFT_RADIUS, _SHIFT_RADIUS + 1)
+    ]
+
+
+def _aligned_distance(variants: list[np.ndarray], template: np.ndarray) -> float:
+    """Distance from ``template`` to whichever alignment fits it best."""
+
+    return min(float(np.mean(np.abs(variant - template))) for variant in variants)
 
 
 def _build_templates(
@@ -333,16 +386,17 @@ def _classify(
     bounds: tuple[int, int, int, int],
     templates: dict[str, tuple[np.ndarray, ...]],
 ) -> _Reading:
-    candidate = _feature(image, bounds)
+    variants = _shifted_variants(_feature(image, bounds))
     scores = sorted(
         (
-            min(_feature_distance(candidate, template) for template in examples),
+            min(_aligned_distance(variants, template) for template in examples),
             label,
         )
         for label, examples in templates.items()
     )
     best_score, label = scores[0]
-    return _Reading(label, best_score, scores[1][0], bounds)
+    second_score, second_label = scores[1]
+    return _Reading(label, best_score, second_label, second_score, bounds)
 
 
 def _read_card(
@@ -356,45 +410,16 @@ def _read_card(
 
 
 def _validate_state(state: ExtractedState) -> None:
-    visible = Counter(card for column in state.columns for card in column)
-    visible.update(card for card in state.cells if card not in (None, BLOCKED_CELL))
-    errors: list[str] = []
-
-    for suit_index, suit in enumerate(SUITS):
-        foundation_rank = state.foundations[suit_index]
-        for rank in range(1, MAX_NUMBER_RANK + 1):
-            expected = int(rank > foundation_rank)
-            actual = visible[f"{suit}{rank}"]
-            if actual != expected:
-                errors.append(
-                    f"{suit}{rank}: expected {expected} visible, detected {actual}"
-                )
-
-    for dragon_index, dragon in enumerate(DRAGONS):
-        expected = 0 if state.dragons_done[dragon_index] else DRAGONS_PER_SET
-        actual = visible[dragon]
-        if actual != expected:
-            errors.append(f"{dragon}: expected {expected} visible, detected {actual}")
-
-    expected_flowers = 0 if state.flower_done else 1
-    if visible[FLOWER] != expected_flowers:
-        errors.append(
-            f"{FLOWER}: expected {expected_flowers} visible, detected {visible[FLOWER]}"
-        )
-
-    blocked_cells = sum(card == BLOCKED_CELL for card in state.cells)
-    if blocked_cells != sum(state.dragons_done):
-        errors.append(
-            f"expected {sum(state.dragons_done)} blocked cells, "
-            f"detected {blocked_cells}"
-        )
-
+    errors = board_errors(
+        state.columns,
+        state.cells,
+        state.foundations,
+        state.flower_done,
+        state.dragons_done,
+    )
     if errors:
-        details = "; ".join(errors[:8])
-        if len(errors) > 8:
-            details += f"; and {len(errors) - 8} more"
         raise ScreenshotRecognitionError(
-            f"Detected layout is not a valid deck: {details}"
+            f"Detected layout is not a valid deck: {summarize_errors(errors)}"
         )
 
 
@@ -403,13 +428,11 @@ def _write_debug_image(image: np.ndarray, readings: list[_Reading], path: Path) 
     scale = max(0.45, image.shape[1] / 2553)
     for reading in readings:
         x1, y1, x2, y2 = reading.bounds
-        color = (
-            (60, 210, 60) if reading.score <= _MAX_CLASSIFICATION_SCORE else (0, 0, 255)
-        )
+        color = (60, 210, 60) if reading.confident else (0, 0, 255)
         cv2.rectangle(output, (x1, y1), (x2, y2), color, max(1, round(scale * 2)))
         cv2.putText(
             output,
-            f"{reading.label} {reading.score:.3f}",
+            f"{reading.label} {reading.score:.3f}/{reading.margin:.4f}",
             (x1, max(12, y1 - round(5 * scale))),
             cv2.FONT_HERSHEY_SIMPLEX,
             scale,
@@ -581,16 +604,27 @@ def extract_state(
         dragons_done=tuple(dragon_done),  # type: ignore[arg-type]
     )
 
-    low_confidence = [
-        reading for reading in readings if reading.score > _MAX_CLASSIFICATION_SCORE
-    ]
     if debug_path is not None:
         _write_debug_image(image, readings, Path(debug_path))
-    if low_confidence:
-        worst = max(low_confidence, key=lambda reading: reading.score)
+
+    not_cards = [
+        reading for reading in readings if reading.score > _MAX_CLASSIFICATION_SCORE
+    ]
+    if not_cards:
+        worst = max(not_cards, key=lambda reading: reading.score)
         raise ScreenshotRecognitionError(
             f"Low-confidence card match: {worst.label} scored {worst.score:.3f}. "
             "Inspect the debug image or use a closer reference screenshot."
+        )
+
+    ambiguous = [reading for reading in readings if not reading.confident]
+    if ambiguous:
+        worst = min(ambiguous, key=lambda reading: reading.margin)
+        raise ScreenshotRecognitionError(
+            f"Ambiguous card match: {worst.label} ({worst.score:.4f}) barely beat "
+            f"{worst.second_label} ({worst.second_score:.4f}), a margin of "
+            f"{worst.margin:.4f}. The crop sits between two cards; inspect the "
+            "debug image or use a screenshot closer to the reference scale."
         )
 
     _validate_state(state)

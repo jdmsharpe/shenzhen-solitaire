@@ -126,12 +126,15 @@ uv run --extra ocr shenzhen-solitaire screenshot.png \
   --debug-image runs/screenshot_debug.png
 ```
 
-Each detected card is labeled with its predicted card and match score. Green
-boxes are within the confidence threshold; red boxes indicate low-confidence
-matches. The debug image is written before a low-confidence recognition error
-is reported, so it can be used to diagnose a failed run. `runs/` is intended
-as a local scratch directory; its generated screenshots and debug images are
-ignored by Git.
+Each detected card is labeled with its predicted card, its match score, and
+the margin by which it beat the runner-up. The margin is the number that
+matters: every pair of distinct cards scores below the absolute threshold, so
+a low score means "this is a card" rather than "this is the right card". Green
+boxes cleared both checks; red boxes are either unrecognizable or too close to
+call. The debug image is written before any recognition error is reported, so
+it is available for exactly the runs worth inspecting. `runs/` is intended as a
+local scratch directory; its generated screenshots and debug images are ignored
+by Git.
 
 ## Development
 
