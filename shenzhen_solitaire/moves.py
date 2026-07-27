@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-COLUMN = "column"
-CELL = "cell"
-FOUNDATION = "foundation"
-FLOWER_FOUNDATION = "flower"
-
 SlotKind = Literal["column", "cell", "foundation", "flower"]
+
+# Annotated rather than inferred: without this each constant infers as ``str``
+# and fails to satisfy ``Slot.kind`` under a type checker.
+COLUMN: SlotKind = "column"
+CELL: SlotKind = "cell"
+FOUNDATION: SlotKind = "foundation"
+FLOWER_FOUNDATION: SlotKind = "flower"
 
 
 @dataclass(frozen=True)

@@ -91,9 +91,14 @@ When no solution comes back, the two possible reasons are reported differently,
 because only one of them is worth retrying. A search that runs out of budget
 reports how far it got and suggests a larger `--max-states`; a search that
 exhausts every reachable position reports the deal as unsolvable and suggests
-nothing, since a larger budget would return the same answer. Memory grows with
-the budget at roughly 1.7 KB per explored state, so a million-state search
-needs around 1.7 GB.
+nothing, since a larger budget would return the same answer.
+
+Memory is worth watching. `--max-states` bounds how many positions are
+*expanded*, but every position *discovered* is retained, and that is between
+one and roughly eight times as many depending on how the deal branches. At
+about 1.45 KB per retained position, a million-state budget can mean anywhere
+from 1.5 GB to well over 8 GB. The retry hint estimates from what the run
+actually retained rather than from the budget.
 
 ## Reference image
 

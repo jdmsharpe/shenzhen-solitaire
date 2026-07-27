@@ -57,13 +57,19 @@ class IllegalMove(ValueError):
 class SolveFailed(RuntimeError):
     """Base class for a search that produced no winning line.
 
-    ``best_state`` is the furthest position the search reached, which is what
-    a caller needs in order to say something useful about why it gave up.
+    ``best_state`` is the furthest position the search reached. ``discovered``
+    is how many distinct positions it had to retain, which is what memory
+    actually tracks; it runs between one and roughly eight times ``explored``
+    depending on how the deal branches, so a caller reporting cost has to use
+    it rather than the state budget.
     """
 
-    def __init__(self, message: str, explored: int, best_state: State) -> None:
+    def __init__(
+        self, message: str, explored: int, discovered: int, best_state: State
+    ) -> None:
         super().__init__(message)
         self.explored = explored
+        self.discovered = discovered
         self.best_state = best_state
 
 
@@ -814,12 +820,14 @@ def solve(
         raise SearchBudgetExhausted(
             f"Search cut short after {explored:,} states without a solution",
             explored,
+            len(best_cost),
             closest,
         )
     raise DealUnsolvable(
         f"This deal has no solution; all {explored:,} reachable "
         "positions were searched",
         explored,
+        len(best_cost),
         closest,
     )
 
@@ -913,9 +921,10 @@ def _state_from_arguments(arguments: argparse.Namespace) -> State:
     )
 
 
-# Measured at roughly 1.7 KB per explored state: solve() retains every
-# position it has seen, so a bigger budget costs proportionally more memory.
-_GIGABYTES_PER_STATE = 1.7e-6
+# Measured at roughly 1.45 KB per position retained. Note "retained", not
+# "explored": the budget bounds expansions, but memory holds every position
+# discovered, and the ratio between the two varies by deal.
+_GIGABYTES_PER_RETAINED_POSITION = 1.45e-6
 
 
 def _describe_failure(failure: SolveFailed, max_states: int) -> str:
@@ -928,10 +937,12 @@ def _describe_failure(failure: SolveFailed, max_states: int) -> str:
     # identical answer.
     if isinstance(failure, SearchBudgetExhausted):
         larger = max_states * 2
-        estimate = larger * _GIGABYTES_PER_STATE
+        # Extrapolate from what this run actually retained rather than from
+        # the budget, because the two are not proportional across deals.
+        estimate = 2 * failure.discovered * _GIGABYTES_PER_RETAINED_POSITION
         hint = f"Try a larger budget: --max-states {larger}"
         if estimate >= 0.1:
-            hint += f" (needs roughly {estimate:.1f} GB)"
+            hint += f" (this deal would then need roughly {estimate:.1f} GB)"
         lines.append(f"{hint}.")
     return "\n".join(lines)
 

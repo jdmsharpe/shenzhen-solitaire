@@ -198,6 +198,8 @@ class SearchOutcomeTest(unittest.TestCase):
         self.assertEqual(caught.exception.explored, 10)
         # The furthest position is carried out so callers can report progress.
         self.assertIsInstance(caught.exception.best_state, State)
+        # Memory tracks retained positions, which outnumber expanded ones.
+        self.assertGreater(caught.exception.discovered, caught.exception.explored)
 
 
 if __name__ == "__main__":
