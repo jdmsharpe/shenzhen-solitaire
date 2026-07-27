@@ -1,8 +1,10 @@
 """Integration test for screenshot recognition when OCR dependencies are present."""
 
 import contextlib
+import functools
 import importlib.util
 import io
+import itertools
 import tempfile
 import unittest
 import unittest.mock
@@ -147,6 +149,63 @@ class RecognitionRobustnessTest(unittest.TestCase):
             self.assertTrue(debug_path.exists())
             self.assertGreater(debug_path.stat().st_size, 0)
 
+    def test_debug_labels_never_overlap_each_other(self) -> None:
+        """Labels have to stay inside the card they describe.
+
+        Sizing them from the image rather than the card drew a five-card
+        column as five overlapping lines, each about twice the width of the
+        card beneath it, so a dense board's annotations were unreadable
+        exactly where reading them mattered. Checked across the resolution
+        range because it is the small end that overflows first.
+        """
+
+        import cv2
+
+        from shenzhen_solitaire import vision
+
+        original = cv2.imread(str(FIXTURE), cv2.IMREAD_COLOR)
+        if original is None:
+            self.fail(f"Could not read fixture: {FIXTURE}")
+
+        for scale in (0.42, 0.7, 1.0, 2.0):
+            with self.subTest(scale=scale):
+                image = cv2.resize(
+                    original,
+                    None,
+                    fx=scale,
+                    fy=scale,
+                    interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC,
+                )
+                geometry = vision._find_geometry(image)
+                card_width = geometry.card_width
+                padding = max(1, round(card_width * 0.015))
+
+                boxes = []
+                for reading in _readings_for(image, geometry):
+                    box = vision._annotation_box(reading, card_width, padding)
+                    self.assertIsNotNone(box)
+                    assert box is not None
+                    left, top, right, bottom = box
+                    text, font_scale, thickness = vision._fit_annotation(
+                        reading, right - left - 2 * padding, bottom - top
+                    )
+                    (width, _), _ = cv2.getTextSize(
+                        text, vision._ANNOTATION_FONT, font_scale, thickness
+                    )
+                    self.assertLessEqual(
+                        width, right - left - 2 * padding, f"{text!r} overhangs"
+                    )
+                    boxes.append((left, top, right, bottom))
+
+                for first, second in itertools.combinations(boxes, 2):
+                    self.assertFalse(
+                        first[0] < second[2]
+                        and second[0] < first[2]
+                        and first[1] < second[3]
+                        and second[1] < first[3],
+                        f"label boxes {first} and {second} overlap",
+                    )
+
     def test_debug_image_is_written_when_recognition_fails(self) -> None:
         """The failing read is the one worth looking at.
 
@@ -257,17 +316,22 @@ class RecognitionErrorTest(unittest.TestCase):
             self.assertIn("extension", str(caught.exception))
 
 
-def _fixture_readings() -> list:
-    """Read every tableau card of the bundled fixture, keeping the scores."""
+@functools.cache
+def _templates() -> dict:
+    """Built once: the tests that sweep scales would otherwise rebuild per run."""
 
     from shenzhen_solitaire import vision
 
     reference = Path(vision.__file__).with_name("shenzhen_reference.png")
-    templates = vision._build_templates(vision._load_image(reference))
-    image = vision._load_image(FIXTURE)
-    geometry = vision._find_geometry(image)
-    components = vision._card_components(image, geometry)
+    return vision._build_templates(vision._load_image(reference))
 
+
+def _readings_for(image, geometry) -> list:
+    """Read every tableau card of one image, keeping the scores."""
+
+    from shenzhen_solitaire import vision
+
+    components = vision._card_components(image, geometry)
     readings = []
     for expected_left in geometry.tableau_lefts:
         component = vision._near_component(
@@ -281,10 +345,19 @@ def _fixture_readings() -> list:
             top = round(component.y + index * geometry.card_step)
             readings.append(
                 vision._read_card(
-                    image, templates, component.x, top, geometry.card_width
+                    image, _templates(), component.x, top, geometry.card_width
                 )
             )
     return readings
+
+
+def _fixture_readings() -> list:
+    """Read every tableau card of the bundled fixture, keeping the scores."""
+
+    from shenzhen_solitaire import vision
+
+    image = vision._load_image(FIXTURE)
+    return _readings_for(image, vision._find_geometry(image))
 
 
 if __name__ == "__main__":

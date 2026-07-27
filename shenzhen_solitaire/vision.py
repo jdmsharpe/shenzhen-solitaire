@@ -140,6 +140,14 @@ _TABLEAU_Y = 2.3343
 # clear of matching a tableau column against the top row.
 _POSITION_TOLERANCE = 0.30
 
+# The rank-and-suit corner a stacked card leaves exposed, as fractions of card
+# width measured from the card's top-left. It is inset from the right edge and
+# shorter than _CARD_STEP, so one card's corner never touches its neighbour's.
+_CORNER_LEFT = 0.0435
+_CORNER_RIGHT = 0.3600
+_CORNER_TOP = 0.0190
+_CORNER_BOTTOM = 0.2490
+
 # A card corner is sampled into this many pixels regardless of the source
 # resolution, so every comparison happens at one fixed size.
 _FEATURE_SIZE = (64, 48)
@@ -171,6 +179,14 @@ _MAX_CLASSIFICATION_SCORE = 0.18
 # a guarantee: when it fires the report names both candidates instead of
 # leaving a misread to surface later as a nonsense deck.
 _MIN_CLASSIFICATION_MARGIN = 0.0005
+
+# Debug labels are measured against the card they annotate, never the image.
+# The floor is where OpenCV's stroke font stops being readable on a card face;
+# the ceiling keeps a 4K capture's labels from dwarfing the cards.
+_ANNOTATION_FONT = cv2.FONT_HERSHEY_SIMPLEX
+_MIN_ANNOTATION_SCALE = 0.34
+_MAX_ANNOTATION_SCALE = 1.10
+_ANNOTATION_FIT_PASSES = 4
 
 # Extensions OpenCV is built to encode. Used to reject a debug path early
 # rather than let it fail once recognition has already run.
@@ -311,10 +327,10 @@ def _corner_bounds(
     image: np.ndarray, left: int, top: int, card_width: float
 ) -> tuple[int, int, int, int]:
     image_height, image_width = image.shape[:2]
-    x1 = max(0, round(left + card_width * 0.0435))
-    x2 = min(image_width, round(left + card_width * 0.3600))
-    y1 = max(0, round(top + card_width * 0.0190))
-    y2 = min(image_height, round(top + card_width * 0.2490))
+    x1 = max(0, round(left + card_width * _CORNER_LEFT))
+    x2 = min(image_width, round(left + card_width * _CORNER_RIGHT))
+    y1 = max(0, round(top + card_width * _CORNER_TOP))
+    y2 = min(image_height, round(top + card_width * _CORNER_BOTTOM))
     if x2 <= x1 or y2 <= y1:
         raise ScreenshotRecognitionError("A detected card lies outside the image")
     return x1, y1, x2, y2
@@ -518,23 +534,127 @@ def _check_debug_path(path: Path) -> None:
         )
 
 
-def _write_debug_image(image: np.ndarray, readings: list[_Reading], path: Path) -> None:
+def _annotation_variants(reading: _Reading) -> tuple[str, ...]:
+    """What one card's label could say, most informative first."""
+
+    return (
+        f"{reading.label} {reading.score:.3f}/{reading.margin:.4f}",
+        f"{reading.label} {reading.score:.3f}",
+        reading.label,
+    )
+
+
+def _annotation_box(
+    reading: _Reading, card_width: float, padding: int
+) -> tuple[int, int, int, int] | None:
+    """The rows beside a card's corner that its label may occupy.
+
+    Bounded by the card's own right edge and by the corner's own rows. That is
+    what keeps labels apart: a corner is inset from that edge, and is shorter
+    than the sliver a stacked card exposes, so these boxes are disjoint both
+    across a row of columns and down a stack. None when the card is too narrow
+    to hold anything beside its corner.
+    """
+
+    x1, y1, x2, y2 = reading.bounds
+    left = x2 + padding
+    right = round(x1 - card_width * _CORNER_LEFT + card_width)
+    if right - left <= 2 * padding:
+        return None
+    return left, y1, right, y2
+
+
+def _fit_annotation(
+    reading: _Reading, width: int, height: int
+) -> tuple[str, float, int]:
+    """Fullest label that stays legible within ``width`` by ``height`` pixels.
+
+    Scaling the text down to fit would make a dense column unreadable, so the
+    size stops falling at _MIN_ANNOTATION_SCALE and the content gives way
+    instead: a large capture is annotated with the score and the margin, a
+    small one with the card name alone.
+    """
+
+    for text in _annotation_variants(reading):
+        (unit_width, unit_height), _ = cv2.getTextSize(text, _ANNOTATION_FONT, 1.0, 1)
+        scale = min(width / unit_width, height / unit_height, _MAX_ANNOTATION_SCALE)
+        if scale < _MIN_ANNOTATION_SCALE:
+            continue
+        # Thicker strokes widen the glyphs, so the drawn width is measured
+        # rather than extrapolated from the unit-scale one, and corrected
+        # until it really fits. Without this the widest labels overhang the
+        # card by a pixel or two into the column beside them, which is the one
+        # thing this layout exists to prevent. Dividing by one more than the
+        # measured width keeps every pass a strict shrink, so rounding cannot
+        # stall it; it converges in two.
+        thickness = max(1, round(scale * 2))
+        for _ in range(_ANNOTATION_FIT_PASSES):
+            (drawn, _), _ = cv2.getTextSize(text, _ANNOTATION_FONT, scale, thickness)
+            if drawn <= width:
+                break
+            scale *= width / (drawn + 1)
+        return text, scale, thickness
+    return reading.label, _MIN_ANNOTATION_SCALE, 1
+
+
+def _write_debug_image(
+    image: np.ndarray,
+    readings: list[_Reading],
+    geometry: _Geometry,
+    path: Path,
+) -> None:
+    """Draw every crop the matcher took, with what it read and how surely.
+
+    Each label is confined to the card its crop came from, in the gap between
+    the corner box and the card's right edge, and spans exactly the box's own
+    rows. Since the corner is inset from that edge and is shorter than the
+    sliver a stacked card exposes, no label can reach the column beside it or
+    the card above it. Sizing from the card rather than from the image is what
+    keeps that true at any resolution: an image-relative size drew a five-card
+    column as five overlapping lines, each about twice the card's width.
+    """
+
     output = image.copy()
-    scale = max(0.45, image.shape[1] / 2553)
+    card_width = geometry.card_width
+    thickness = max(1, round(card_width / 90))
+    padding = max(1, round(card_width * 0.015))
+
     for reading in readings:
         x1, y1, x2, y2 = reading.bounds
         color = (60, 210, 60) if reading.confident else (0, 0, 255)
-        cv2.rectangle(output, (x1, y1), (x2, y2), color, max(1, round(scale * 2)))
+        cv2.rectangle(output, (x1, y1), (x2, y2), color, thickness)
+
+        box = _annotation_box(reading, card_width, padding)
+        if box is None:
+            continue
+        left, top, right, bottom = box
+
+        text, scale, text_thickness = _fit_annotation(
+            reading, right - left - 2 * padding, bottom - top
+        )
+        (text_width, text_height), _ = cv2.getTextSize(
+            text, _ANNOTATION_FONT, scale, text_thickness
+        )
+        # Card faces are near-white and the felt is mid-green, so the label
+        # carries its own backing rather than relying on either to contrast.
+        cv2.rectangle(
+            output,
+            (left, top),
+            (min(right, left + text_width + 2 * padding), bottom),
+            (32, 32, 32),
+            cv2.FILLED,
+        )
         cv2.putText(
             output,
-            f"{reading.label} {reading.score:.3f}/{reading.margin:.4f}",
-            (x1, max(12, y1 - round(5 * scale))),
-            cv2.FONT_HERSHEY_SIMPLEX,
+            text,
+            (left + padding, (top + bottom + text_height) // 2),
+            _ANNOTATION_FONT,
             scale,
             color,
-            max(1, round(scale * 2)),
+            text_thickness,
             cv2.LINE_AA,
         )
+
     if not cv2.imwrite(str(path), output):
         raise ScreenshotRecognitionError(f"Could not write debug image: {path}")
 
@@ -753,5 +873,5 @@ def extract_state(
         # out by _check_debug_path before any work starts, so raising here
         # cannot replace the diagnosis this image exists to illustrate.
         if debug_path is not None:
-            _write_debug_image(image, readings, Path(debug_path))
+            _write_debug_image(image, readings, geometry, Path(debug_path))
     return state
