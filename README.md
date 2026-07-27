@@ -13,9 +13,10 @@ the rank-and-suit corner instead of comparing the entire card face.
 ![SHENZHEN I/O calibration deal used to build card templates](shenzhen_solitaire/shenzhen_reference.png)
 
 When reading a new screenshot, the recognizer locates the green playfield,
-scales the expected layout to match it, and labels each detected card corner.
-The debug output below shows each prediction and its match-distance score;
-lower scores are better, and green boxes are within the acceptance threshold.
+scales the expected layout from its width, and labels each detected card
+corner. The debug output below shows each prediction, its match-distance
+score, and the margin by which it beat the runner-up; lower scores are better,
+and green boxes are within the acceptance threshold.
 
 ![OCR debug output with predicted cards and confidence scores](docs/images/shenzhen_debug.png)
 
@@ -72,8 +73,16 @@ Omit `[ocr]` when only the dependency-free solver is needed.
 ## Solving a screenshot
 
 Capture the full green playfield with all tableau columns and the top row
-visible. Window movement, cropping, and uniform scaling are supported, but the
-game theme and card artwork should match the reference image.
+visible. Window movement, cropping, resolution, and window shape are all
+supported: every measurement is taken from the playfield's width, so a 16:9
+window and a 16:10 one read the same board identically even though the felt
+is a different shape in each. The game theme and card artwork do need to match
+the reference image.
+
+Resolution has a floor but no ceiling. Cards must come out at least 64 pixels
+wide, which needs a playfield around 800 pixels across; below that the rank
+glyphs stop separating reliably, so a smaller capture is reported as too small
+rather than guessed at.
 
 ```console
 uv run --extra ocr shenzhen-solitaire path/to/screenshot.png
@@ -142,15 +151,22 @@ uv run --extra ocr shenzhen-solitaire screenshot.png \
   --debug-image runs/screenshot_debug.png
 ```
 
-Each detected card is labeled with its predicted card, its match score, and
-the margin by which it beat the runner-up. The margin is the number that
-matters: every pair of distinct cards scores below the absolute threshold, so
-a low score means "this is a card" rather than "this is the right card". Green
-boxes cleared both checks; red boxes are either unrecognizable or too close to
-call. The debug image is written before any recognition error is reported, so
-it is available for exactly the runs worth inspecting. `runs/` is intended as a
-local scratch directory; its generated screenshots and debug images are ignored
-by Git.
+Each detected card is labeled beside its corner with the predicted card, its
+match score, and the margin by which it beat the runner-up. The margin is the
+number that matters: every pair of distinct cards scores below the absolute
+threshold, so a low score means "this is a card" rather than "this is the
+right card". Green boxes cleared both checks; red boxes are either
+unrecognizable or too close to call.
+
+Labels are sized from the card they annotate rather than from the image, so
+each one stays inside its own card. On a capture too small to fit all three
+values legibly, a label drops the margin, then the score, instead of shrinking
+until it is unreadable or running into the column alongside.
+
+The debug image is written even when recognition fails, so the runs most worth
+inspecting are the ones it covers. Give the path a real image extension, since
+OpenCV picks its encoder from it. `runs/` is intended as a local scratch
+directory; its generated screenshots and debug images are ignored by Git.
 
 ## Development
 

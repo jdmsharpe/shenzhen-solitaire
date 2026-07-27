@@ -1,9 +1,14 @@
 """Screenshot recognition for the SHENZHEN I/O Solitaire solver.
 
 The recognizer is calibrated from ``shenzhen_reference.png``.  It finds the
-green playfield, scales all layout measurements relative to it, and compares
+green playfield, scales all layout measurements from its width, and compares
 the exposed upper-left corner of each card with templates taken from the
 reference image.
+
+Width, not the playfield's bounding box: the game sizes its cards from the
+window width and lets the felt fill whatever height is left, so only the
+horizontal extent is a fixed multiple of card size. That is what makes the
+reading independent of both resolution and window shape.
 """
 
 from __future__ import annotations
