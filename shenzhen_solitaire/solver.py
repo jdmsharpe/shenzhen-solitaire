@@ -91,16 +91,24 @@ class SearchBudgetExhausted(SolveFailed):
 
 @dataclass(frozen=True)
 class State:
-    """Immutable snapshot of every card location and completed set."""
+    """Immutable snapshot of every card location and completed set.
+
+    The tuple fields carry their length in a constant rather than in the type.
+    Spelling the arity out cost a suppression at each of the fourteen sites
+    that rebuild one of these from a list, and bought nothing back: every index
+    into them is a computed variable, so a checker never had a literal to
+    range-check in the first place.
+    """
 
     # Each column is bottom -> top.
     columns: tuple[tuple[str, ...], ...]
-    cells: tuple[str | None, str | None, str | None]
-    # Foundation ranks in D, B, C order.
-    foundations: tuple[int, int, int]
+    # FREE_CELL_COUNT cells. None is empty; BLOCKED_CELL is covered by dragons.
+    cells: tuple[str | None, ...]
+    # Foundation ranks, in SUITS order.
+    foundations: tuple[int, ...]
     flower_done: bool
-    # Cleared dragon sets in R, G, W order.
-    dragons_done: tuple[bool, bool, bool]
+    # Cleared dragon sets, in DRAGONS order.
+    dragons_done: tuple[bool, ...]
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,7 @@ def put_on_foundation(state: State, source: Slot) -> tuple[State, str]:
     cells = list(state.cells)
     foundations = list(state.foundations)
 
+    card: str | None
     if source.kind == COLUMN:
         card = columns[source.index].pop()
     elif source.kind == CELL:
@@ -177,8 +186,8 @@ def put_on_foundation(state: State, source: Slot) -> tuple[State, str]:
     return (
         State(
             columns=tuple(tuple(column) for column in columns),
-            cells=tuple(cells),  # type: ignore[arg-type]
-            foundations=tuple(foundations),  # type: ignore[arg-type]
+            cells=tuple(cells),
+            foundations=tuple(foundations),
             flower_done=state.flower_done,
             dragons_done=state.dragons_done,
         ),
@@ -216,7 +225,7 @@ def _move_flower_to_foundation(state: State) -> tuple[State, Move | None]:
             return (
                 State(
                     columns=state.columns,
-                    cells=tuple(cells),  # type: ignore[arg-type]
+                    cells=tuple(cells),
                     foundations=state.foundations,
                     flower_done=True,
                     dragons_done=state.dragons_done,
@@ -245,15 +254,15 @@ def _automatic_foundation_candidates(state: State) -> list[tuple[Slot, str]]:
         ] + 1 and safe_for_automatic_foundation(state, card):
             candidates.append((Slot(COLUMN, column_index), card))
 
-    for cell_index, card in enumerate(state.cells):
-        if not is_number_card(card):
+    for cell_index, cell_card in enumerate(state.cells):
+        if not is_number_card(cell_card):
             continue
 
-        foundation = foundation_index(card)
-        if card_rank(card) == state.foundations[
+        foundation = foundation_index(cell_card)
+        if card_rank(cell_card) == state.foundations[
             foundation
-        ] + 1 and safe_for_automatic_foundation(state, card):
-            candidates.append((Slot(CELL, cell_index), card))
+        ] + 1 and safe_for_automatic_foundation(state, cell_card):
+            candidates.append((Slot(CELL, cell_index), cell_card))
 
     return candidates
 
@@ -352,10 +361,10 @@ def _dragon_clear_edges(state: State) -> Iterator[Edge]:
 
         next_state = State(
             columns=tuple(tuple(column) for column in columns),
-            cells=tuple(cells),  # type: ignore[arg-type]
+            cells=tuple(cells),
             foundations=state.foundations,
             flower_done=state.flower_done,
-            dragons_done=tuple(dragons_done),  # type: ignore[arg-type]
+            dragons_done=tuple(dragons_done),
         )
         next_state, automatic = normalize_automatic_moves(next_state)
         yield Edge(
@@ -389,19 +398,19 @@ def _foundation_edges(state: State) -> Iterator[Edge]:
             )
 
     # Free-cell-to-foundation moves.
-    for cell_index, card in enumerate(state.cells):
-        if not is_number_card(card):
+    for cell_index, cell_card in enumerate(state.cells):
+        if not is_number_card(cell_card):
             continue
 
-        foundation = foundation_index(card)
-        if card_rank(card) == state.foundations[foundation] + 1:
+        foundation = foundation_index(cell_card)
+        if card_rank(cell_card) == state.foundations[foundation] + 1:
             source = Slot(CELL, cell_index)
             next_state, _ = put_on_foundation(state, source)
             next_state, automatic = normalize_automatic_moves(next_state)
             yield Edge(
                 next_state,
                 CardMove(
-                    cards=(card,),
+                    cards=(cell_card,),
                     source=source,
                     destination=Slot(FOUNDATION, foundation),
                 ),
@@ -482,7 +491,7 @@ def _free_cell_to_tableau_edges(state: State) -> Iterator[Edge]:
 
             next_state = State(
                 columns=tuple(tuple(column) for column in columns),
-                cells=tuple(cells),  # type: ignore[arg-type]
+                cells=tuple(cells),
                 foundations=state.foundations,
                 flower_done=state.flower_done,
                 dragons_done=state.dragons_done,
@@ -519,7 +528,7 @@ def _tableau_to_free_cell_edges(state: State) -> Iterator[Edge]:
 
             next_state = State(
                 columns=tuple(tuple(column) for column in columns),
-                cells=tuple(cells),  # type: ignore[arg-type]
+                cells=tuple(cells),
                 foundations=state.foundations,
                 flower_done=state.flower_done,
                 dragons_done=state.dragons_done,
@@ -664,10 +673,10 @@ def _apply_dragon_clear(state: State, dragon: str, destination: Slot) -> State:
     dragons_done[DRAGONS.index(dragon)] = True
     return State(
         columns=tuple(tuple(column) for column in columns),
-        cells=tuple(cells),  # type: ignore[arg-type]
+        cells=tuple(cells),
         foundations=state.foundations,
         flower_done=state.flower_done,
-        dragons_done=tuple(dragons_done),  # type: ignore[arg-type]
+        dragons_done=tuple(dragons_done),
     )
 
 
@@ -701,8 +710,8 @@ def apply_move(state: State, move: Move) -> State:
             )
             return State(
                 columns=tuple(tuple(column) for column in columns),
-                cells=tuple(cells),  # type: ignore[arg-type]
-                foundations=tuple(foundations),  # type: ignore[arg-type]
+                cells=tuple(cells),
+                foundations=tuple(foundations),
                 flower_done=flower_done,
                 dragons_done=state.dragons_done,
             )
@@ -895,9 +904,9 @@ def _state_from_arguments(arguments: argparse.Namespace) -> State:
         state = State(
             columns=START_COLUMNS,
             cells=(None,) * FREE_CELL_COUNT,
-            foundations=(0, 0, 0),
+            foundations=(0,) * len(SUITS),
             flower_done=False,
-            dragons_done=(False, False, False),
+            dragons_done=(False,) * len(DRAGONS),
         )
         # A hand-typed deal gets the same deck check a recognized one does.
         # Without it a single typo is indistinguishable from a hard deal: the

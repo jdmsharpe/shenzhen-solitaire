@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import TypeGuard
 
 SUITS = ("D", "B", "C")
 DRAGONS = ("RD", "GD", "WD")
@@ -19,8 +20,13 @@ NUMBER_CARD_LABELS = frozenset(
 )
 
 
-def is_number_card(card: str | None) -> bool:
-    """Return whether ``card`` is a numbered suit card in the game."""
+def is_number_card(card: str | None) -> TypeGuard[str]:
+    """Return whether ``card`` is a numbered suit card in the game.
+
+    Returns a ``TypeGuard`` rather than a plain ``bool`` so that guarding on it
+    also narrows away ``None``.  Every caller that asks this question goes on
+    to call ``card_suit`` or ``card_rank``, and those need a ``str``.
+    """
 
     return card in NUMBER_CARD_LABELS
 

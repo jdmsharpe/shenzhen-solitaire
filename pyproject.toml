@@ -19,7 +19,7 @@ ocr = ["numpy>=1.23", "opencv-python-headless>=4.10,<6"]
 shenzhen-solitaire = "shenzhen_solitaire.solver:main"
 
 [dependency-groups]
-dev = ["ruff>=0.12"]
+dev = ["mypy>=1.11", "ruff>=0.12"]
 
 [tool.setuptools]
 include-package-data = true
@@ -32,3 +32,18 @@ shenzhen_solitaire = ["*.png"]
 
 [tool.ruff]
 target-version = "py310"
+
+[tool.mypy]
+files = ["shenzhen_solitaire", "test"]
+
+# python_version is deliberately unset, so mypy checks against the interpreter
+# in use rather than the 3.10 floor in requires-python. Pinning it to 3.10 made
+# mypy read the installed numpy's stubs as 3.10 code and reject their PEP 695
+# syntax -- a pairing that cannot arise, since that numpy needs 3.12 or newer.
+
+# The OCR dependencies are optional, so mypy has to run with or without them.
+# This covers the without case only: both ship type information, so when they
+# are installed mypy resolves them normally and checks vision.py against them.
+[[tool.mypy.overrides]]
+module = ["cv2", "numpy"]
+ignore_missing_imports = true

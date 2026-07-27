@@ -39,13 +39,16 @@ class ScreenshotRecognitionError(ValueError):
 
 @dataclass(frozen=True)
 class ExtractedState:
-    """State values extracted from one screenshot."""
+    """State values extracted from one screenshot.
+
+    Mirrors the tuple fields of ``State``, arity included.
+    """
 
     columns: tuple[tuple[str, ...], ...]
-    cells: tuple[str | None, str | None, str | None]
-    foundations: tuple[int, int, int]
+    cells: tuple[str | None, ...]
+    foundations: tuple[int, ...]
     flower_done: bool
-    dragons_done: tuple[bool, bool, bool]
+    dragons_done: tuple[bool, ...]
 
 
 @dataclass(frozen=True)
@@ -599,10 +602,10 @@ def extract_state(
 
     state = ExtractedState(
         columns=tuple(columns),
-        cells=tuple(cells),  # type: ignore[arg-type]
-        foundations=tuple(foundations),  # type: ignore[arg-type]
+        cells=tuple(cells),
+        foundations=tuple(foundations),
         flower_done=flower_done,
-        dragons_done=tuple(dragon_done),  # type: ignore[arg-type]
+        dragons_done=tuple(dragon_done),
     )
 
     if debug_path is not None:

@@ -58,6 +58,8 @@ class RecognitionRobustnessTest(unittest.TestCase):
 
         reference = Path(vision.__file__).with_name("shenzhen_reference.png")
         original = cv2.imread(str(FIXTURE), cv2.IMREAD_COLOR)
+        if original is None:
+            self.fail(f"Could not read fixture: {FIXTURE}")
 
         with tempfile.TemporaryDirectory() as directory:
             for scale in (0.85, 1.1):

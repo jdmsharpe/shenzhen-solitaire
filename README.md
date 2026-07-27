@@ -160,10 +160,13 @@ Run the tests and code-quality checks with:
 uv run --extra ocr python -m unittest discover -s test -v
 uv run ruff check .
 uv run ruff format --check .
+uv run --extra ocr mypy
 ```
 
 The OCR integration test skips automatically when the optional dependencies
-are not installed.
+are not installed. `mypy` takes its settings and file list from
+`pyproject.toml`, and passes either way; including the extra is what lets it
+check `vision.py` against the real OpenCV and NumPy signatures.
 
 Solutions are returned as `Move` objects rather than strings, so a solution can
 be replayed and checked rather than only printed:
