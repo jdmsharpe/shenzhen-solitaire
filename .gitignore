@@ -1,5 +1,6 @@
 __pycache__/
 .ruff_cache/
+.coverage
 *.py[cod]
 .venv/
 .venv-windows/
