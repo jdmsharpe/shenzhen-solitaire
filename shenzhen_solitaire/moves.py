@@ -26,6 +26,12 @@ class Slot:
 
     ``index`` identifies the tableau column, free cell, or suit foundation.
     The flower foundation is unique, so its index is always zero.
+
+    Columns render as ``T1``..``T8`` rather than ``C1``..``C8`` so that no slot
+    can be misread as a card.  ``C1``..``C8`` are the character suit's own
+    labels, which left ``C4/B3 C8 -> C3`` asking the reader to parse grammar to
+    tell the card from the columns.  Render slots through this method rather
+    than rebuilding the prefix at each call site, so the two never drift.
     """
 
     kind: SlotKind
@@ -34,7 +40,7 @@ class Slot:
     def __str__(self) -> str:
         match self.kind:
             case "column":
-                return f"C{self.index + 1}"
+                return f"T{self.index + 1}"
             case "cell":
                 return f"F{self.index + 1}"
             case "foundation":

@@ -80,8 +80,24 @@ uv run --extra ocr shenzhen-solitaire path/to/screenshot.png
 ```
 
 The command prints the recognized columns first, followed by the manual moves
-and any automatic moves triggered by each action. Limit the search when
-experimenting with difficult deals:
+and any automatic moves triggered by each action. Moves are written in this
+notation:
+
+| Token | Meaning |
+| --- | --- |
+| `D1`–`D9` | red dots |
+| `B1`–`B9` | green bamboo |
+| `C1`–`C9` | black characters |
+| `RD` `GD` `WD` | red, green, and white dragons |
+| `FL` | flower |
+| `T1`–`T8` | tableau columns, numbered from the left |
+| `F1`–`F3` | free cells |
+
+So `C4/B3 T8 -> T3` moves the character 4 and the bamboo 3 it carries from
+column 8 onto column 3. Cards are named by suit and slots by location, and no
+prefix means both, so a move never needs its grammar parsed to be read.
+
+Limit the search when experimenting with difficult deals:
 
 ```console
 uv run --extra ocr shenzhen-solitaire screenshot.png --max-states 1000000
@@ -163,7 +179,7 @@ state, _ = normalize_automatic_moves(state)
 for move, automatic in solution:
     state = apply_move(state, move)  # raises IllegalMove if the move is not legal
     state, _ = normalize_automatic_moves(state)
-    print(move)  # renders as "C4/B3 C8 -> C3"
+    print(move)  # renders as "C4/B3 T8 -> T3"
 ```
 
 The test suite uses exactly this to verify that every solution it produces is

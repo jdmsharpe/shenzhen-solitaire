@@ -26,6 +26,7 @@ from .config import (
     TABLEAU_COLUMN_COUNT,
     board_errors,
     card_rank,
+    card_suit,
     foundation_index,
     is_number_card,
     summarize_errors,
@@ -532,7 +533,7 @@ def extract_state(
         rank = card_rank(reading.label)
         if foundations[suit_index]:
             raise ScreenshotRecognitionError(
-                f"Detected two foundations for suit {reading.label[0]}"
+                f"Detected two foundations for suit {card_suit(reading.label)}"
             )
         foundations[suit_index] = rank
 

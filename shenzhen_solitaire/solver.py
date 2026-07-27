@@ -10,6 +10,12 @@ C1..C9 : black characters
 RD/GD/WD : red, green, and white dragons
 FL : flower
 
+Every card label is exactly two characters wide, so printed columns line up
+without padding.
+
+Moves name slots, not cards: T1..T8 are tableau columns and F1..F3 are free
+cells.  Neither prefix is a suit letter, so a move reads unambiguously.
+
 Each tableau column is written from bottom to top, so the final item is
 the exposed card.
 
@@ -594,7 +600,7 @@ def _place_cards(
         column = columns[destination.index]
         _require(
             can_stack(cards[0], column[-1] if column else None),
-            f"{cards[0]} cannot stack on C{destination.index + 1}",
+            f"{cards[0]} cannot stack on {destination}",
         )
         column.extend(cards)
         return flower_done
@@ -604,9 +610,7 @@ def _place_cards(
         _require(
             0 <= destination.index < len(cells), f"No free cell {destination.index + 1}"
         )
-        _require(
-            cells[destination.index] is None, f"F{destination.index + 1} is occupied"
-        )
+        _require(cells[destination.index] is None, f"{destination} is occupied")
         cells[destination.index] = cards[0]
         return flower_done
 
@@ -931,10 +935,10 @@ def _state_from_arguments(arguments: argparse.Namespace) -> State:
         raise SystemExit(f"Screenshot recognition failed: {error}") from error
 
     print("Detected columns (bottom -> top):")
-    for index, column in enumerate(extracted.columns, start=1):
-        print(f"  C{index}: {' '.join(column) or '(empty)'}")
+    for index, column in enumerate(extracted.columns):
+        print(f"  {Slot(COLUMN, index)}: {' '.join(column) or '(empty)'}")
     print(
-        f"Cells: {extracted.cells}; foundations (D/B/C): "
+        f"Cells: {extracted.cells}; foundations ({'/'.join(SUITS)}): "
         f"{extracted.foundations}; flower: "
         f"{'done' if extracted.flower_done else 'in play'}\n"
     )
