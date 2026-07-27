@@ -5,6 +5,7 @@ import importlib.util
 import io
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 OCR_AVAILABLE = all(
@@ -61,18 +62,63 @@ class RecognitionRobustnessTest(unittest.TestCase):
         if original is None:
             self.fail(f"Could not read fixture: {FIXTURE}")
 
+        # Spans the smallest card the size guard admits up to a 4K capture.
+        # The narrow 0.85-1.1 band this replaced held while recognition was
+        # already drifting: a real 0.75-scale screenshot read every card
+        # correctly but at a margin of 0.0005, which the gate then refused.
         with tempfile.TemporaryDirectory() as directory:
-            for scale in (0.85, 1.1):
+            for scale in (0.42, 0.55, 0.85, 1.1, 1.6, 2.0):
                 with self.subTest(scale=scale):
                     resized = cv2.resize(
                         original,
                         None,
                         fx=scale,
                         fy=scale,
-                        interpolation=cv2.INTER_AREA,
+                        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC,
                     )
                     path = Path(directory) / f"scaled_{scale}.png"
                     cv2.imwrite(str(path), resized)
+
+                    state = vision.extract_state(path, reference)
+
+                    self.assertEqual(state.columns, EXPECTED_COLUMNS)
+
+    def test_a_taller_felt_does_not_move_the_layout(self) -> None:
+        """A wider window grows the felt downward without resizing the cards.
+
+        This is the 16:9 regression. Deriving vertical spans from the felt's
+        height made card_step shrink as the felt grew, so columns measured
+        short, every component missed its expected position, and an entirely
+        readable board came back as eight empty columns.
+        """
+
+        import cv2
+        import numpy as np
+
+        from shenzhen_solitaire import vision
+
+        reference = Path(vision.__file__).with_name("shenzhen_reference.png")
+        original = cv2.imread(str(FIXTURE), cv2.IMREAD_COLOR)
+        if original is None:
+            self.fail(f"Could not read fixture: {FIXTURE}")
+        _, felt_y, _, felt_height = vision._find_geometry(original).felt
+
+        with tempfile.TemporaryDirectory() as directory:
+            for extra_rows in (150, 400, 700):
+                with self.subTest(extra_rows=extra_rows):
+                    # Repeating a row of bare felt lengthens the playfield
+                    # without touching a card, so any change in the reading
+                    # comes from the layout maths rather than the pixels.
+                    seam = felt_y + felt_height - 3
+                    stretched = np.vstack(
+                        [
+                            original[: seam + 1],
+                            np.repeat(original[seam : seam + 1], extra_rows, axis=0),
+                            original[seam + 1 :],
+                        ]
+                    )
+                    path = Path(directory) / f"stretched_{extra_rows}.png"
+                    cv2.imwrite(str(path), stretched)
 
                     state = vision.extract_state(path, reference)
 
@@ -97,6 +143,41 @@ class RecognitionRobustnessTest(unittest.TestCase):
             debug_path = Path(directory) / "debug.png"
 
             vision.extract_state(FIXTURE, reference, debug_path)
+
+            self.assertTrue(debug_path.exists())
+            self.assertGreater(debug_path.stat().st_size, 0)
+
+    def test_debug_image_is_written_when_recognition_fails(self) -> None:
+        """The failing read is the one worth looking at.
+
+        Refusals raised while the board is still being read used to return
+        before the image was written, so the run that most needed a picture
+        was the one that produced none.
+        """
+
+        from shenzhen_solitaire import vision
+
+        def fail_after_one_card(image, templates, geometry, components, readings):
+            readings.append(
+                vision._read_card(
+                    image,
+                    templates,
+                    geometry.tableau_lefts[0],
+                    geometry.tableau_y,
+                    geometry.card_width,
+                )
+            )
+            raise vision.ScreenshotRecognitionError("simulated mid-board refusal")
+
+        reference = Path(vision.__file__).with_name("shenzhen_reference.png")
+        with tempfile.TemporaryDirectory() as directory:
+            debug_path = Path(directory) / "debug.png"
+
+            with (
+                unittest.mock.patch.object(vision, "_read_board", fail_after_one_card),
+                self.assertRaises(vision.ScreenshotRecognitionError),
+            ):
+                vision.extract_state(FIXTURE, reference, debug_path)
 
             self.assertTrue(debug_path.exists())
             self.assertGreater(debug_path.stat().st_size, 0)
@@ -127,6 +208,53 @@ class RecognitionErrorTest(unittest.TestCase):
         reference = Path(vision.__file__).with_name("shenzhen_reference.png")
         with self.assertRaises(vision.ScreenshotRecognitionError):
             vision.extract_state(Path("no-such-screenshot.png"), reference)
+
+    def test_a_screenshot_too_small_to_read_is_refused(self) -> None:
+        """Shrinking past the guard has to say so, not guess.
+
+        Below it the fixture misreads erratically, and not every misread
+        there trips the margin gate, so silence would mean a plausible but
+        wrong deck rather than a visible failure.
+        """
+
+        import cv2
+
+        from shenzhen_solitaire import vision
+
+        reference = Path(vision.__file__).with_name("shenzhen_reference.png")
+        original = cv2.imread(str(FIXTURE), cv2.IMREAD_COLOR)
+        if original is None:
+            self.fail(f"Could not read fixture: {FIXTURE}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            tiny = cv2.resize(
+                original, None, fx=0.3, fy=0.3, interpolation=cv2.INTER_AREA
+            )
+            path = Path(directory) / "tiny.png"
+            cv2.imwrite(str(path), tiny)
+
+            with self.assertRaises(vision.ScreenshotRecognitionError) as caught:
+                vision.extract_state(path, reference)
+
+            self.assertIn("higher resolution", str(caught.exception))
+
+    def test_a_debug_path_without_an_image_extension_is_refused(self) -> None:
+        """OpenCV picks its encoder from the extension and raises without one.
+
+        Checked before any work happens, so the report arrives immediately
+        and as a recognition error rather than an OpenCV traceback.
+        """
+
+        from shenzhen_solitaire import vision
+
+        reference = Path(vision.__file__).with_name("shenzhen_reference.png")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(vision.ScreenshotRecognitionError) as caught:
+                vision.extract_state(
+                    FIXTURE, reference, Path(directory) / "Screenshot 2026"
+                )
+
+            self.assertIn("extension", str(caught.exception))
 
 
 def _fixture_readings() -> list:

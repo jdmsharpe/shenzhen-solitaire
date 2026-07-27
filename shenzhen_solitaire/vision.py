@@ -114,16 +114,43 @@ _REFERENCE_COLUMNS = (
     ("B8", "GD", "D5", "GD", "B3"),
 )
 
-# Measurements are ratios of the detected green playfield. They tolerate
-# window movement, screenshot cropping, and uniform resolution changes.
+# Horizontal measurements are fractions of the detected green playfield's
+# width, which the game lays its board out from.
 _FIRST_COLUMN_X = 0.0380
 _COLUMN_PITCH = 0.1187
-_TABLEAU_Y = 0.3522
-_CARD_STEP = 0.0389
 _CARD_WIDTH = 0.0942
-_CARD_HEIGHT = 0.2864
-_TOP_ROW_Y = 0.0222
 _FLOWER_X = 0.4813
+
+# Vertical measurements are multiples of the card width, *not* fractions of
+# the playfield's height. The game sizes its cards from the window width and
+# lets the felt grow downward to fill whatever height is left over, so the
+# felt's aspect ratio is not fixed: it measures 1.585 on a 16:10 window and
+# 1.821 on a 16:9 one, while card width stays within 0.3% of felt width on
+# both. Height-relative spans therefore drift with the window's shape rather
+# than its resolution. That is what made 16:9 screenshots read as eight empty
+# columns: card_step came out 11% short, so every column measured the wrong
+# height and no component landed where the layout predicted.
+_CARD_HEIGHT = 1.9156
+_CARD_STEP = 0.2559
+_TOP_ROW_Y = 0.1464
+_TABLEAU_Y = 2.3343
+
+# How far a component may sit from where the layout predicts, as a multiple of
+# card width. The two rows are 2.19 card widths apart, so this stays well
+# clear of matching a tableau column against the top row.
+_POSITION_TOLERANCE = 0.30
+
+# A card corner is sampled into this many pixels regardless of the source
+# resolution, so every comparison happens at one fixed size.
+_FEATURE_SIZE = (64, 48)
+
+# Below this a corner crop carries too few source pixels to separate ranks
+# whose glyphs differ by one stroke. Downscaling the fixture reads perfectly
+# at a 64.5 pixel card and wider, but between 61.3 and 48 it misreads
+# erratically -- and not every misread there trips the margin gate, so the
+# size is checked directly rather than left to be caught downstream. A card
+# this wide needs roughly an 800-pixel window, well under any real capture.
+_MINIMUM_CARD_WIDTH = 64.0
 
 # A corner crop is roughly 51x37 source pixels scaled to 64x48, so one feature
 # pixel is about 0.8 source pixels. A radius of 2 therefore only tolerated
@@ -136,12 +163,20 @@ _SHIFT_RADIUS = 4
 # the margin's job, not this threshold's.
 _MAX_CLASSIFICATION_SCORE = 0.18
 
-# How far the best match must beat the runner-up. Measured over the fixture
-# plus seven perturbations (rescale, stretch, brightness), the tightest margin
-# on a correct read is 0.0008, so this leaves some room below that. It is a
-# diagnostic, not a guarantee: when it fires the report names both candidates
-# instead of leaving a misread to surface later as a nonsense deck.
+# How far the best match must beat the runner-up. Across every resolution and
+# felt aspect ratio the size guard admits, the tightest margin on a correct
+# read is 0.0013, at the smallest accepted card; it is 0.0078 at the reference
+# scale. This leaves headroom below that rather than tracking it closely,
+# because a false rejection costs a usable screenshot. It is a diagnostic, not
+# a guarantee: when it fires the report names both candidates instead of
+# leaving a misread to surface later as a nonsense deck.
 _MIN_CLASSIFICATION_MARGIN = 0.0005
+
+# Extensions OpenCV is built to encode. Used to reject a debug path early
+# rather than let it fail once recognition has already run.
+_DEBUG_IMAGE_SUFFIXES = frozenset(
+    {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+)
 
 
 def _load_image(path: Path) -> np.ndarray:
@@ -179,17 +214,26 @@ def _find_geometry(image: np.ndarray) -> _Geometry:
     y = int(stat[cv2.CC_STAT_TOP])
     width = int(stat[cv2.CC_STAT_WIDTH])
     height = int(stat[cv2.CC_STAT_HEIGHT])
+
+    card_width = width * _CARD_WIDTH
+    if card_width < _MINIMUM_CARD_WIDTH:
+        raise ScreenshotRecognitionError(
+            f"The playfield is only {width} pixels wide, which leaves cards "
+            f"{card_width:.0f} pixels across; recognition needs at least "
+            f"{_MINIMUM_CARD_WIDTH:.0f}. Capture the game at a higher resolution."
+        )
+
     lefts = tuple(
         round(x + width * (_FIRST_COLUMN_X + index * _COLUMN_PITCH))
         for index in range(TABLEAU_COLUMN_COUNT)
     )
     return _Geometry(
         felt=(x, y, width, height),
-        card_width=width * _CARD_WIDTH,
-        card_height=height * _CARD_HEIGHT,
-        tableau_y=round(y + height * _TABLEAU_Y),
-        card_step=height * _CARD_STEP,
-        top_y=round(y + height * _TOP_ROW_Y),
+        card_width=card_width,
+        card_height=card_width * _CARD_HEIGHT,
+        tableau_y=round(y + card_width * _TABLEAU_Y),
+        card_step=card_width * _CARD_STEP,
+        top_y=round(y + card_width * _TOP_ROW_Y),
         tableau_lefts=lefts,
         flower_left=round(x + width * _FLOWER_X),
     )
@@ -248,13 +292,15 @@ def _near_component(
     *,
     top_row: bool,
 ) -> _Component | None:
-    _, _, felt_width, felt_height = geometry.felt
+    tolerance = geometry.card_width * _POSITION_TOLERANCE
     candidates = [
         component
         for component in components
-        if abs(component.x - expected_x) <= felt_width * 0.025
-        and abs(component.y - expected_y) <= felt_height * 0.030
-        and (not top_row or component.height <= felt_height * 0.40)
+        if abs(component.x - expected_x) <= tolerance
+        and abs(component.y - expected_y) <= tolerance
+        # A free cell or foundation shows a single card. Anything appreciably
+        # taller is a tableau column, whatever its horizontal position.
+        and (not top_row or component.height <= geometry.card_height * 1.35)
     ]
     if not candidates:
         return None
@@ -274,12 +320,32 @@ def _corner_bounds(
     return x1, y1, x2, y2
 
 
+def _resample(crop: np.ndarray) -> np.ndarray:
+    """Scale a corner crop to the fixed feature size.
+
+    The interpolation has to follow the direction of the resize. INTER_AREA
+    averages the source pixels it covers when shrinking, but degenerates to
+    nearest-neighbour when asked to grow. Using it in both directions sampled
+    the reference, whose 51x37 corners are upscaled here, by a different
+    algorithm than a 4K screenshot, whose corners are downscaled. Matching the
+    direction roughly tripled the worst-case margin between the best and
+    second-best card across a 0.45x to 2.0x scale sweep.
+    """
+
+    shrinking = crop.shape[1] >= _FEATURE_SIZE[0] and crop.shape[0] >= _FEATURE_SIZE[1]
+    return cv2.resize(
+        crop,
+        _FEATURE_SIZE,
+        interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_LINEAR,
+    )
+
+
 def _feature(image: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
     x1, y1, x2, y2 = bounds
     crop = image[y1:y2, x1:x2]
     if crop.size == 0:
         raise ScreenshotRecognitionError("Could not crop a detected card corner")
-    crop = cv2.resize(crop, (64, 48), interpolation=cv2.INTER_AREA)
+    crop = _resample(crop)
     hue, saturation, value = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
 
     ink = ((saturation > 45) | (value < 135)).astype(np.float32)
@@ -427,6 +493,31 @@ def _validate_state(state: ExtractedState) -> None:
         )
 
 
+def _check_debug_path(path: Path) -> None:
+    """Reject a debug path that cannot be written, before doing the work.
+
+    ``cv2.imwrite`` picks its encoder from the file extension and *raises*
+    rather than returning False when it cannot find one, so an extensionless
+    path used to surface as an OpenCV traceback after recognition had already
+    finished. Checking first turns that into an immediate, readable message.
+
+    Both checks also run early so that writing the image cannot fail during a
+    recognition failure, where raising would replace the diagnosis the debug
+    image was asked for in the first place.
+    """
+
+    if path.suffix.lower() not in _DEBUG_IMAGE_SUFFIXES:
+        supported = ", ".join(sorted(_DEBUG_IMAGE_SUFFIXES))
+        raise ScreenshotRecognitionError(
+            f"Debug image path needs an image file extension ({supported}); "
+            f"got {path.name!r}"
+        )
+    if not path.parent.is_dir():
+        raise ScreenshotRecognitionError(
+            f"Debug image directory does not exist: {path.parent}"
+        )
+
+
 def _write_debug_image(image: np.ndarray, readings: list[_Reading], path: Path) -> None:
     output = image.copy()
     scale = max(0.45, image.shape[1] / 2553)
@@ -448,21 +539,20 @@ def _write_debug_image(image: np.ndarray, readings: list[_Reading], path: Path) 
         raise ScreenshotRecognitionError(f"Could not write debug image: {path}")
 
 
-def extract_state(
-    screenshot_path: str | Path,
-    reference_path: str | Path,
-    debug_path: str | Path | None = None,
+def _read_board(
+    image: np.ndarray,
+    templates: dict[str, tuple[np.ndarray, ...]],
+    geometry: _Geometry,
+    components: list[_Component],
+    readings: list[_Reading],
 ) -> ExtractedState:
-    """Recognize a screenshot and return values suitable for ``State``."""
+    """Read every slot on the board, recording each card in ``readings``.
 
-    screenshot_path = Path(screenshot_path)
-    reference_path = Path(reference_path)
-    image = _load_image(screenshot_path)
-    reference = _load_image(reference_path)
-    templates = _build_templates(reference)
-    geometry = _find_geometry(image)
-    components = _card_components(image, geometry)
-    readings: list[_Reading] = []
+    ``readings`` is filled in place rather than returned so that a caller
+    unwinding from a failure part-way through still holds the cards recognized
+    before it, which is what the debug image needs in order to show where the
+    read went wrong.
+    """
 
     columns: list[tuple[str, ...]] = []
     for expected_left in geometry.tableau_lefts:
@@ -600,7 +690,7 @@ def extract_state(
             "Cleared dragon sets exceed the available free cells"
         )
 
-    state = ExtractedState(
+    return ExtractedState(
         columns=tuple(columns),
         cells=tuple(cells),
         foundations=tuple(foundations),
@@ -608,8 +698,9 @@ def extract_state(
         dragons_done=tuple(dragon_done),
     )
 
-    if debug_path is not None:
-        _write_debug_image(image, readings, Path(debug_path))
+
+def _check_confidence(readings: list[_Reading]) -> None:
+    """Refuse a board that was read, but not read convincingly."""
 
     not_cards = [
         reading for reading in readings if reading.score > _MAX_CLASSIFICATION_SCORE
@@ -631,5 +722,36 @@ def extract_state(
             "debug image or use a screenshot closer to the reference scale."
         )
 
-    _validate_state(state)
+
+def extract_state(
+    screenshot_path: str | Path,
+    reference_path: str | Path,
+    debug_path: str | Path | None = None,
+) -> ExtractedState:
+    """Recognize a screenshot and return values suitable for ``State``."""
+
+    screenshot_path = Path(screenshot_path)
+    reference_path = Path(reference_path)
+    if debug_path is not None:
+        _check_debug_path(Path(debug_path))
+    image = _load_image(screenshot_path)
+    reference = _load_image(reference_path)
+    templates = _build_templates(reference)
+    geometry = _find_geometry(image)
+    components = _card_components(image, geometry)
+
+    readings: list[_Reading] = []
+    try:
+        state = _read_board(image, templates, geometry, components, readings)
+        _check_confidence(readings)
+        _validate_state(state)
+    finally:
+        # A debug image earns its keep precisely when recognition fails, so it
+        # is written on the way out rather than only on the success path. The
+        # two ways writing it can realistically fail -- an extension OpenCV
+        # cannot encode, and a directory that is not there -- are both ruled
+        # out by _check_debug_path before any work starts, so raising here
+        # cannot replace the diagnosis this image exists to illustrate.
+        if debug_path is not None:
+            _write_debug_image(image, readings, Path(debug_path))
     return state
