@@ -148,7 +148,7 @@ Use `--debug-image` to save an annotated copy of the screenshot:
 
 ```console
 uv run --extra ocr shenzhen-solitaire screenshot.png \
-  --debug-image runs/screenshot_debug.png
+  --debug-image deals/screenshot_debug.png
 ```
 
 Each detected card is labeled beside its corner with the predicted card, its
@@ -165,7 +165,7 @@ until it is unreadable or running into the column alongside.
 
 The debug image is written even when recognition fails, so the runs most worth
 inspecting are the ones it covers. Give the path a real image extension, since
-OpenCV picks its encoder from it. `runs/` is intended as a local scratch
+OpenCV picks its encoder from it. `deals/` is intended as a local scratch
 directory; its generated screenshots and debug images are ignored by Git.
 
 ## Development
