@@ -69,27 +69,6 @@ shenzhen-solitaire path/to/screenshot.png
 
 Omit `[ocr]` when only the dependency-free solver is needed.
 
-### Sharing a checkout between Windows and WSL
-
-Windows and WSL cannot share the same virtual environment. If both operate on
-this checkout, give each platform its own uv environment before running a
-command:
-
-```powershell
-# Windows PowerShell
-$env:UV_PROJECT_ENVIRONMENT = ".venv-windows"
-uv run --extra ocr shenzhen-solitaire path\to\screenshot.png
-```
-
-```console
-# WSL
-export UV_PROJECT_ENVIRONMENT=.venv-wsl
-uv run --extra ocr shenzhen-solitaire path/to/screenshot.png
-```
-
-The bundled calibration image is loaded automatically. Pass the screenshot of
-the deal to solve as the positional argument, not `shenzhen_reference.png`.
-
 ## Solving a screenshot
 
 Capture the full green playfield with all tableau columns and the top row
@@ -107,6 +86,14 @@ experimenting with difficult deals:
 ```console
 uv run --extra ocr shenzhen-solitaire screenshot.png --max-states 1000000
 ```
+
+When no solution comes back, the two possible reasons are reported differently,
+because only one of them is worth retrying. A search that runs out of budget
+reports how far it got and suggests a larger `--max-states`; a search that
+exhausts every reachable position reports the deal as unsolvable and suggests
+nothing, since a larger budget would return the same answer. Memory grows with
+the budget at roughly 1.7 KB per explored state, so a million-state search
+needs around 1.7 GB.
 
 ## Reference image
 
@@ -153,3 +140,28 @@ uv run ruff format --check .
 
 The OCR integration test skips automatically when the optional dependencies
 are not installed.
+
+Solutions are returned as `Move` objects rather than strings, so a solution can
+be replayed and checked rather than only printed:
+
+```python
+from shenzhen_solitaire import apply_move, normalize_automatic_moves, solve
+
+solution, explored = solve(state)
+
+# solve() works from the normalized position, so a replay has to start there
+# too, and re-normalize after each manual move to absorb the auto-play.
+state, _ = normalize_automatic_moves(state)
+for move, automatic in solution:
+    state = apply_move(state, move)  # raises IllegalMove if the move is not legal
+    state, _ = normalize_automatic_moves(state)
+    print(move)  # renders as "C4/B3 C8 -> C3"
+```
+
+The test suite uses exactly this to verify that every solution it produces is
+legal and actually wins, since `apply_move` checks the rules independently of
+the code that generates candidate moves.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
