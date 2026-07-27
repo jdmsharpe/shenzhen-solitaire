@@ -33,10 +33,12 @@ from .config import (
     FREE_CELL_COUNT,
     MAX_NUMBER_RANK,
     SUITS,
+    board_errors,
     card_rank,
     card_suit,
     foundation_index,
     is_number_card,
+    summarize_errors,
 )
 from .moves import (
     CELL,
@@ -886,13 +888,28 @@ def _parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _state_from_arguments(arguments: argparse.Namespace) -> State:
     if arguments.screenshot is None:
-        return State(
+        state = State(
             columns=START_COLUMNS,
             cells=(None,) * FREE_CELL_COUNT,
             foundations=(0, 0, 0),
             flower_done=False,
             dragons_done=(False, False, False),
         )
+        # A hand-typed deal gets the same deck check a recognized one does.
+        # Without it a single typo is indistinguishable from a hard deal: the
+        # search spends the whole budget and then advises raising it.
+        errors = board_errors(
+            state.columns,
+            state.cells,
+            state.foundations,
+            state.flower_done,
+            state.dragons_done,
+        )
+        if errors:
+            raise SystemExit(
+                f"START_COLUMNS is not a valid deal: {summarize_errors(errors)}"
+            )
+        return state
 
     try:
         from .vision import ScreenshotRecognitionError, extract_state
