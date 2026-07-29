@@ -12,11 +12,13 @@ the rank-and-suit corner instead of comparing the entire card face.
 
 ![SHENZHEN I/O calibration deal used to build card templates](shenzhen_solitaire/shenzhen_reference.png)
 
-When reading a new screenshot, the recognizer locates the green playfield,
-scales the expected layout from its width, and labels each detected card
-corner. The debug output below shows each prediction, its match-distance
-score, and the margin by which it beat the runner-up; lower scores are better,
-and green boxes are within the acceptance threshold.
+When reading a screenshot, the recognizer locates the green playfield, scales
+the expected layout from its width, and labels each detected card corner. Below
+is that same calibration image read back, so every label can be checked against
+the card underneath it. Each prediction carries its match-distance score and
+the margin by which it beat the runner-up; green boxes cleared both thresholds.
+Scoring its own reference puts every score at 0.000, which leaves the margins
+on show: even an exact match beats its runner-up by only 0.014 to 0.050.
 
 ![OCR debug output with predicted cards and confidence scores](docs/images/shenzhen_debug.png)
 
