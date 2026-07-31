@@ -18,7 +18,7 @@ is that same calibration image read back, so every label can be checked against
 the card underneath it. Each prediction carries its match-distance score and
 the margin by which it beat the runner-up; green boxes cleared both thresholds.
 Scoring its own reference puts every score at 0.000, which leaves the margins
-on show: even an exact match beats its runner-up by only 0.014 to 0.050.
+on show: even an exact match beats its runner-up by only 0.015 to 0.049.
 
 ![OCR debug output with predicted cards and confidence scores](docs/images/shenzhen_debug.png)
 
@@ -81,10 +81,11 @@ window and a 16:10 one read the same board identically even though the felt
 is a different shape in each. The game theme and card artwork do need to match
 the reference image.
 
-Resolution has a floor but no ceiling. Cards must come out at least 64 pixels
-wide, which needs a playfield around 800 pixels across; below that the rank
+Resolution has a floor but no ceiling. Cards must come out at least 66 pixels
+wide, which needs a playfield around 700 pixels across; below that the rank
 glyphs stop separating reliably, so a smaller capture is reported as too small
-rather than guessed at.
+rather than guessed at. The floor is a property of the bundled templates rather
+than of the layout, so replacing the reference image can move it.
 
 ```console
 uv run --extra ocr shenzhen-solitaire path/to/screenshot.png
@@ -133,6 +134,12 @@ The package includes `shenzhen_reference.png`, which is used automatically.
 It contains every card face in a known deal so the recognizer can build visual
 templates for the current game theme.
 
+The deal is captured before the first move, so the flower is the only card that
+has left the tableau: the game auto-plays it to its own slot as the board is
+dealt. That is what makes a fresh deal a complete alphabet. The eight columns
+carry 39 of the 40 cards, which covers all 30 numbers and dragons, and the
+flower slot supplies the thirty-first class.
+
 Supply a different calibration screenshot with `--reference`:
 
 ```console
@@ -142,7 +149,14 @@ uv run --extra ocr shenzhen-solitaire screenshot.png \
 
 A replacement reference must show the same known calibration deal represented
 by `_REFERENCE_COLUMNS` in `shenzhen_solitaire/vision.py`. If the deal differs,
-update that label map to match its tableau from bottom to top.
+update that label map to match its tableau from bottom to top, and capture the
+new deal before moving anything, so that every class is still on the board.
+
+Swapping the reference also re-measures the recognizer against itself, since the
+templates are what the score and margin are computed from. Re-check
+`_MINIMUM_CARD_WIDTH` against `test/fixtures/shenzhen_test.png` afterwards: the
+resolution at which ranks stop separating moves with the templates, and the
+guard is what keeps a too-small capture from being guessed at.
 
 ## Debug images
 

@@ -108,15 +108,16 @@ class _Reading:
 
 # The reference image contains every card face. These labels describe its
 # tableau from bottom to top and are used only to build visual templates.
+
 _REFERENCE_COLUMNS = (
-    ("B5", "B1", "GD", "B4", "WD"),
-    ("B6", "WD", "D9", "D7"),
-    ("D2", "RD", "C9", "RD", "RD"),
-    ("C7", "D3", "C3", "RD", "C6"),
-    ("C8", "C2", "D4", "B2", "B9"),
-    ("WD", "WD", "D8"),
-    ("D6", "GD", "B7", "C4", "C5"),
-    ("B8", "GD", "D5", "GD", "B3"),
+    ("GD", "D5", "B1", "WD", "RD"),
+    ("B9", "D6", "C1", "WD"),
+    ("B5", "C7", "RD", "C6", "C5"),
+    ("GD", "D7", "B2", "B6", "GD"),
+    ("RD", "B4", "D8", "B7", "D3"),
+    ("D2", "D9", "B8", "WD", "C2"),
+    ("C8", "C9", "WD", "D4", "C4"),
+    ("GD", "B3", "D1", "C3", "RD"),
 )
 
 # Horizontal measurements are fractions of the detected green playfield's
@@ -159,11 +160,16 @@ _FEATURE_SIZE = (64, 48)
 
 # Below this a corner crop carries too few source pixels to separate ranks
 # whose glyphs differ by one stroke. Downscaling the fixture reads perfectly
-# at a 64.5 pixel card and wider, but between 61.3 and 48 it misreads
-# erratically -- and not every misread there trips the margin gate, so the
-# size is checked directly rather than left to be caught downstream. A card
-# this wide needs roughly an 800-pixel window, well under any real capture.
-_MINIMUM_CARD_WIDTH = 64.0
+# at a 65.7 pixel card and wider; from there down to 62.5 it refuses more
+# often than it reads, and at 62.5 it misreads a D5 as D8 convincingly enough
+# to clear the margin gate. That last case is why the size is checked directly
+# rather than left to be caught downstream. A card this wide needs a playfield
+# around 700 pixels across, well under any real capture.
+#
+# The exact figure is a property of the templates, not of the layout, so it
+# moves when the calibration image does: it was 64.0 for the reference this one
+# replaced. Re-measure it against the fixture when swapping references.
+_MINIMUM_CARD_WIDTH = 66.0
 
 # A corner crop is roughly 51x37 source pixels scaled to 64x48, so one feature
 # pixel is about 0.8 source pixels. A radius of 2 therefore only tolerated
@@ -178,11 +184,11 @@ _MAX_CLASSIFICATION_SCORE = 0.18
 
 # How far the best match must beat the runner-up. Across every resolution and
 # felt aspect ratio the size guard admits, the tightest margin on a correct
-# read is 0.0013, at the smallest accepted card; it is 0.0078 at the reference
-# scale. This leaves headroom below that rather than tracking it closely,
-# because a false rejection costs a usable screenshot. It is a diagnostic, not
-# a guarantee: when it fires the report names both candidates instead of
-# leaving a misread to surface later as a nonsense deck.
+# read is 0.0013, near the smallest accepted card; it is 0.0090 at the
+# reference scale. This leaves headroom below that rather than tracking it
+# closely, because a false rejection costs a usable screenshot. It is a
+# diagnostic, not a guarantee: when it fires the report names both candidates
+# instead of leaving a misread to surface later as a nonsense deck.
 _MIN_CLASSIFICATION_MARGIN = 0.0005
 
 # Debug labels are measured against the card they annotate, never the image.
@@ -441,27 +447,23 @@ def _build_templates(
             bounds = _corner_bounds(reference, component.x, top, geometry.card_width)
             templates[label].append(_feature(reference, bounds))
 
-    top_templates = (
-        (geometry.flower_left, FLOWER),
-        (geometry.tableau_lefts[5], "C1"),
-        (geometry.tableau_lefts[6], "D1"),
+    # The flower is the one class the tableau cannot supply, since it leaves for
+    # its own slot before the player has a move.
+    flower_component = _near_component(
+        components,
+        geometry,
+        geometry.flower_left,
+        geometry.top_y,
+        top_row=True,
     )
-    for expected_left, label in top_templates:
-        component = _near_component(
-            components,
-            geometry,
-            expected_left,
-            geometry.top_y,
-            top_row=True,
+    if flower_component is None:
+        raise ScreenshotRecognitionError(
+            f"The calibration image is missing the {FLOWER} template"
         )
-        if component is None:
-            raise ScreenshotRecognitionError(
-                f"The calibration image is missing the {label} template"
-            )
-        bounds = _corner_bounds(
-            reference, component.x, component.y, geometry.card_width
-        )
-        templates[label].append(_feature(reference, bounds))
+    bounds = _corner_bounds(
+        reference, flower_component.x, flower_component.y, geometry.card_width
+    )
+    templates[FLOWER].append(_feature(reference, bounds))
 
     expected_class_count = len(SUITS) * MAX_NUMBER_RANK + len(DRAGONS) + 1
     if len(templates) != expected_class_count:
