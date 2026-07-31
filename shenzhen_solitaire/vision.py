@@ -542,11 +542,14 @@ def _check_debug_path(path: Path) -> None:
 
 
 def _annotation_variants(reading: _Reading) -> tuple[str, ...]:
-    """What one card's label could say, most informative first."""
+    """What one card's label could say, most informative first.
+
+    Only the margin is drawn. The absolute score is near-binary.
+    Refusals still quote both scores.
+    """
 
     return (
-        f"{reading.label} {reading.score:.3f}/{reading.margin:.4f}",
-        f"{reading.label} {reading.score:.3f}",
+        f"{reading.label} {reading.margin:.3f}",
         reading.label,
     )
 
@@ -578,8 +581,8 @@ def _fit_annotation(
 
     Scaling the text down to fit would make a dense column unreadable, so the
     size stops falling at _MIN_ANNOTATION_SCALE and the content gives way
-    instead: a large capture is annotated with the score and the margin, a
-    small one with the card name alone.
+    instead: a capture with room is annotated with the margin, one without it
+    with the card name alone.
     """
 
     for text in _annotation_variants(reading):

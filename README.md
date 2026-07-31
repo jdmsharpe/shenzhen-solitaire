@@ -15,10 +15,10 @@ the rank-and-suit corner instead of comparing the entire card face.
 When reading a screenshot, the recognizer locates the green playfield, scales
 the expected layout from its width, and labels each detected card corner. Below
 is that same calibration image read back, so every label can be checked against
-the card underneath it. Each prediction carries its match-distance score and
-the margin by which it beat the runner-up; green boxes cleared both thresholds.
-Scoring its own reference puts every score at 0.000, which leaves the margins
-on show: even an exact match beats its runner-up by only 0.015 to 0.049.
+the card underneath it. Each prediction carries the margin by which it beat the
+runner-up; a green box cleared both confidence checks. Even here, where every
+card is an exact match against its own reference, that margin is only 0.015 to
+0.049.
 
 ![OCR debug output with predicted cards and confidence scores](docs/images/shenzhen_debug.png)
 
@@ -167,17 +167,18 @@ uv run --extra ocr shenzhen-solitaire screenshot.png \
   --debug-image deals/screenshot_debug.png
 ```
 
-Each detected card is labeled beside its corner with the predicted card, its
-match score, and the margin by which it beat the runner-up. The margin is the
-number that matters: every pair of distinct cards scores below the absolute
-threshold, so a low score means "this is a card" rather than "this is the
-right card". Green boxes cleared both checks; red boxes are either
-unrecognizable or too close to call.
+Each detected card is labeled beside its corner with the predicted card and the
+margin by which it beat the runner-up. Green boxes cleared both confidence
+checks; red boxes are either unrecognizable or too close to call.
+
+The margin is the only number drawn because it is the only graded one. The
+absolute score that rules out non-cards is effectively pass or fail. A real
+corner scores under 0.02 against a 0.18 threshold while bare felt scores 0.35, so the box color already carries it, and a refusal quotes both figures.
 
 Labels are sized from the card they annotate rather than from the image, so
-each one stays inside its own card. On a capture too small to fit all three
-values legibly, a label drops the margin, then the score, instead of shrinking
-until it is unreadable or running into the column alongside.
+each one stays inside its own card. On a capture too small to fit the margin
+legibly, a label falls back to the card name alone instead of shrinking until
+it is unreadable or running into the column alongside.
 
 The debug image is written even when recognition fails, so the runs most worth
 inspecting are the ones it covers. Give the path a real image extension, since
